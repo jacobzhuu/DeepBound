@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DeepBound 边界演示</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="hero">
+        <div class="hero-brand">
+          <div class="logo">DeepBound</div>
+          <div>
+            <h1>函数边界可视化</h1>
+            <p>在二进制字节流上对比 DeepBound 预测、真实标注与 IDA-PRO（如有）结果。</p>
+          </div>
+        </div>
+        <div class="hero-actions">
+          <button id="run-demo" class="primary">运行模型</button>
+          <button id="reset-demo" class="ghost">重置</button>
+        </div>
+      </header>
+
+      <section class="dashboard">
+        <aside class="sidebar">
+          <div class="card controls">
+            <div class="card-header">
+              <h2>运行控制</h2>
+              <span class="badge" id="run-status">空闲</span>
+            </div>
+            <label class="field">
+              <span>样本</span>
+              <select id="sample-select"></select>
+            </label>
+            <div class="field-grid">
+              <label class="field">
+                <span>起始位置</span>
+                <input id="start-index" type="number" min="0" step="1" />
+              </label>
+              <label class="field">
+                <span>结束位置</span>
+                <input id="end-index" type="number" min="0" step="1" />
+              </label>
+            </div>
+            <div class="control-actions">
+              <button id="recommend-sample" class="ghost">自动推荐样例</button>
+            </div>
+            <div class="toggle-group">
+              <label class="toggle">
+                <input id="toggle-labels" type="checkbox" checked />
+                <span>显示标签</span>
+              </label>
+              <label class="toggle">
+                <input id="toggle-diffs" type="checkbox" checked />
+                <span>高亮差异</span>
+              </label>
+            </div>
+          </div>
+
+          <div class="card metrics">
+            <div class="card-header">
+              <h2>指标概览</h2>
+              <div class="card-header-actions">
+                <div class="metric-scope" role="group" aria-label="指标范围">
+                  <button type="button" class="scope-btn active" data-metrics-scope="slice">片段</button>
+                  <button type="button" class="scope-btn" data-metrics-scope="validation">验证集</button>
+                </div>
+                <span class="badge ghost" id="metrics-scope-badge">仅当前片段</span>
+                <button id="run-validation" class="ghost hidden" type="button" title="运行验证集评估">
+                  <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                    <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                  </svg>
+                </button>
+              </div>
+            </div>
+            <div class="metric-columns">
+              <div class="metric-column">
+                <h3>DeepBound</h3>
+                <div class="metric metric-row" data-metric="accuracy"><span>准确率</span><strong id="metric-deepbound-acc">-</strong></div>
+                <div class="metric metric-row" data-metric="precision"><span>精确率</span><strong id="metric-deepbound-prec">-</strong></div>
+                <div class="metric metric-row" data-metric="recall"><span>召回率</span><strong id="metric-deepbound-recall">-</strong></div>
+                <div class="metric metric-row" data-metric="f1"><span>F1</span><strong id="metric-deepbound-f1">-</strong></div>
+              </div>
+              <div class="metric-column ida-column funcbound-only">
+                <h3>IDA-PRO</h3>
+                <div class="metric metric-row" data-metric="accuracy"><span>准确率</span><strong id="metric-ida-acc">-</strong></div>
+                <div class="metric metric-row" data-metric="precision"><span>精确率</span><strong id="metric-ida-prec">-</strong></div>
+                <div class="metric metric-row" data-metric="recall"><span>召回率</span><strong id="metric-ida-recall">-</strong></div>
+                <div class="metric metric-row" data-metric="f1"><span>F1</span><strong id="metric-ida-f1">-</strong></div>
+              </div>
+            </div>
+            <div class="chart-wrap">
+              <canvas id="metrics-chart" height="160"></canvas>
+            </div>
+            <p id="metrics-note" class="metrics-note"></p>
+          </div>
+
+          <div class="card logs">
+            <div class="card-header">
+              <h2>运行日志</h2>
+              <span class="badge ghost" id="progress-label">0%</span>
+            </div>
+            <div class="progress">
+              <div id="progress-fill" class="progress-fill"></div>
+            </div>
+            <div id="log-list" class="log-list"></div>
+          </div>
+        </aside>
+
+        <section class="viewer">
+          <div class="card viewer-card">
+            <div class="viewer-header">
+              <div>
+                <h2>序列视图</h2>
+                <p class="viewer-subtitle" id="sequence-meta">样本: -</p>
+              </div>
+              <div class="viewer-tags">
+                <span class="chip">真实标注</span>
+                <span class="chip funcbound-only">IDA-PRO</span>
+                <span class="chip">DeepBound</span>
+              </div>
+            </div>
+            
+            <div class="legend" style="margin-bottom: 4px;">
+              <span class="legend-item start" id="legend-start">F = 函数起始</span>
+              <span class="legend-item end" id="legend-middle">R = 函数结束</span>
+              <span class="legend-item none" id="legend-none">- = 非边界</span>
+            </div>
+
+            <div id="sequence-grid" class="sequence-grid show-labels show-diffs">
+              <div class="sequence-row" data-source="truth">
+                <div class="row-label">
+                  <span class="tag truth">真实标注</span>
+                  <span class="row-meta" id="row-meta-truth"></span>
+                </div>
+                <div class="row-track" id="row-truth"></div>
+              </div>
+              <div class="sequence-row funcbound-only" data-source="ida">
+                <div class="row-label">
+                  <span class="tag ida">IDA-PRO</span>
+                  <span class="row-meta" id="row-meta-ida"></span>
+                </div>
+                <div class="row-track" id="row-ida"></div>
+              </div>
+              <div class="sequence-row" data-source="deepbound">
+                <div class="row-label">
+                  <span class="tag deepbound">DeepBound</span>
+                  <span class="row-meta" id="row-meta-deepbound"></span>
+                </div>
+                <div class="row-track" id="row-deepbound"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card disassembly">
+            <div class="card-header collapsible" id="disassembly-header" style="cursor: pointer;">
+              <h2>反汇编视图</h2>
+              <button class="ghost icon-btn" id="disassembly-toggle" title="收起/展开">
+                <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" class="toggle-icon">
+                  <polyline points="18 15 12 9 6 15"></polyline>
+                </svg>
+              </button>
+            </div>
+            <div class="code-block" id="disassembly-view">
+              <div class="placeholder">等待推理...</div>
+            </div>
+          </div>
+
+          <div class="card insights">
+            <div class="card-header">
+              <h2>边界统计</h2>
+              <span class="badge ghost">当前片段</span>
+            </div>
+            <div class="insight-grid">
+              <div class="insight-item">
+                <span class="insight-label" id="insight-label-deepbound-start">DeepBound 起始命中</span>
+                <strong id="insight-deepbound-start">-</strong>
+              </div>
+              <div class="insight-item end-only">
+                <span class="insight-label" id="insight-label-deepbound-end">DeepBound 结束命中</span>
+                <strong id="insight-deepbound-end">-</strong>
+              </div>
+              <div class="insight-item funcbound-only">
+                <span class="insight-label" id="insight-label-ida-start">IDA 起始命中</span>
+                <strong id="insight-ida-start">-</strong>
+              </div>
+              <div class="insight-item funcbound-only end-only">
+                <span class="insight-label" id="insight-label-ida-end">IDA 结束命中</span>
+                <strong id="insight-ida-end">-</strong>
+              </div>
+            </div>
+          </div>
+        </section>
+      </section>
+    </div>
+
+    <template id="log-item-template">
+      <div class="log-item">
+        <span class="log-time"></span>
+        <span class="log-text"></span>
+      </div>
+    </template>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

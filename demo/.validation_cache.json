@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "tasks": {
+    "funcbound": {
+      "scope": "validation",
+      "task": "funcbound",
+      "samples": 10,
+      "totalTokens": 4652544,
+      "dataRoot": "/home/zhuzy/XDA/data-raw/msvs_funcbound_64_bap_test",
+      "metrics": {
+        "deepbound": {
+          "accuracy": 0.9998903825519974,
+          "precision": 0.9989717012175058,
+          "recall": 0.9799072019366553,
+          "f1": 0.9893476179807319
+        },
+        "ida": {
+          "accuracy": 0.99940505667437,
+          "precision": 0.98588736519771,
+          "recall": 0.8963082509582408,
+          "f1": 0.9389661439621285
+        }
+      },
+      "timing": {
+        "ioMs": 5010,
+        "predictMs": 82258
+      },
+      "device": "cuda"
+    }
+  }
+}
