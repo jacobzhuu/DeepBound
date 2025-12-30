@@ -1,117 +1,277 @@
-## Introduction
+根据您的要求，我删除了图片占位符，并用您提供的详细环境配置方案替换了之前的通用安装步骤。这份 README 文档现在更贴合实际代码仓库的部署需求（包含 Conda 环境隔离、Fairseq 编译安装、以及具体的 Demo 运行指南）。
 
-DeepBound is a tool to disassemble instructions and recovers function boundaries of stripped binaries. It is based on transfer learning using Transformer encoder with masked language modeling objective [1, 2, 3]. It outperforms state-of-the-art tools (e.g., IDA Pro, Ghidra, and bidirectional RNN [4]). Please find the details in our paper: [DeepBound: Accurate, Robust Disassembly with Transfer Learning](https://arxiv.org/abs/2010.00770)
+您可以直接复制以下内容作为项目的 `README.md`。
 
+---
+
+# DeepBound: 基于 Transformer 架构的二进制函数边界检测系统
+
+**北京邮电大学 | 网络空间安全学院 | 计算机系统结构课程大作业 (第10组)**
+
+## 📖 项目简介
+
+**DeepBound** 是一个针对剥离符号表（Stripped Binaries）的二进制函数边界检测工具。针对传统工具（如 IDA Pro）在处理高优化级别（-O3）和复杂编译器行为时的局限性，本项目提出并实现了一种基于 **Transformer** 架构的深度学习反汇编方案。
+
+核心优势在于利用自注意力机制（Self-Attention）捕捉二进制字节流中的长距离依赖关系（如栈平衡指令对），从而在不依赖特征签名的情况下，实现高精度的函数起始（Start）与结束（End）预测。
+
+## ✨ 核心特性
+
+* **Transformer 架构驱动**：利用双向 Transformer 编码器并行处理长序列，有效捕捉跨基本块的语义依赖。
+* 
+**抗编译器优化**：在 `-O3` 激进优化等级下，F1-Score 仍保持在 **96.5%** 。
+
+
+* 
+**鲁棒性**：针对指令重排、函数内联、尾调用优化等场景具有极强的适应性 。
+
+
+* **可视化交互平台**：提供像素级对齐的序列视图与增强反汇编视图，支持实时推理监控。
+
+## 🛠️ 环境配置与安装
+
+为了确保 `fairseq` 及其 C++/Cython 扩展正确编译，强烈建议使用 **Conda** 创建独立环境（避免与系统现有 torch 版本冲突）。
+
+### 1. 基础依赖准备
+
+确保系统中有可用的 C/C++ 编译器（Linux 上通常是 `gcc`/`g++`）。
+
+* *可选*：如果你设置了 `CUDA_HOME` 且想编译 CUDA 扩展，则需要完整 CUDA Toolkit（含 `nvcc`）；不需要的话不要设置 `CUDA_HOME` 也能正常安装。
+
+### 2. 创建并激活 Conda 环境
+
+```bash
+# 创建环境 (指定 Python 3.7)
+conda create -n deepbound python=3.7 numpy scipy scikit-learn colorama
+
+# 激活环境
+conda activate deepbound
 
 ```
-@inproceedings{pei2021deepbound,
-    title={DeepBound: Accurate, Robust Disassembly with Transfer Learning},
-    author={Pei, Kexin and Guan, Jonas and King, David Williams and Yang, Junfeng and Jana, Suman},
-    year={2021},
-    booktitle={Proceedings of the 2021 Network and Distributed System Security Symposium (NDSS)}
-}
+
+### 3. 安装 PyTorch
+
+根据你的硬件选择合适的版本。
+
+* **GPU 版本 (推荐，示例为 CUDA 11.0)**：
+```bash
+conda install pytorch torchvision torchaudio cudatoolkit=11.0 -c pytorch
+
 ```
 
 
-## Installation
-We recommend using `conda` to setup the environment and install the required packages.
+* **CPU 版本**：
+```bash
+conda install pytorch torchvision torchaudio cpuonly -c pytorch
 
-First, create the conda environment,
-
-`conda create -n deepbound python=3.7 numpy scipy scikit-learn colorama`
-
-and activate the conda environment:
-
-`conda activate deepbound`
-
-Then, install the latest Pytorch (assume you have GPU):
-
-`conda install pytorch torchvision torchaudio cudatoolkit=11.0 -c pytorch`
-
-Finally, enter the deepbound root directory: e.g., `path/to/deepbound`, and install DeepBound:
-
-`pip install --editable .`
-
-## Preparation
-
-### Pretrained models:
-
-Create the `checkpoints` and `checkpoints/pretrain_all` subdirectory in `path/to/deepbound`
-
-`mkdir -p checkpoints/pretrain_all`
-
-Download our [pretrained weight parameters](https://drive.google.com/file/d/1qgEcqrTqBp2n_sy5RhS_YiYY-YpNI5N_/view?usp=sharing) and put in `checkpoints/pretrain_all`
-
-- 2022-1-19: Uploaded a new dedicated [pretrained weight](https://drive.google.com/file/d/1dPax61zm4pS4Vsbc_Py7Ycp2H59MugP4/view?usp=sharing) for Linux x64 binaries compiled by both GCC and Clang 
-
-### Finetuned models:
-
-We also provide the finetuned model for you to directly play on function boundary recovery. The finetuned model is trained on binaries compiled by MSVC x64. Create the `checkpoints/finetune_msvs_funcbound_64` subdirectory in `path/to/deepbound`
-
-`mkdir -p checkpoints/finetune_msvs_funcbound_64`
-
-Download our [finetuned weight parameters](https://drive.google.com/file/d/10XZSE8jfFp3P5KjHp4SFZ0qUmOJoA8uI/view?usp=sharing) and put in `checkpoints/finetune_msvs_funcbound_64`. 
-
-- 2024-11-04: Uploaded new [finetuned weight parameters](https://drive.google.com/file/d/1i9nMRwXj6b8mGG9LGUmon3BkOTOeyIqv/view?usp=sharing) for elf instruction boundary prediction (not tested, might be inaccurate).
-
-#### Play with the finetuned model
-We have put some sample data from BAP corpus compiled by MSVC x64 in `data-raw/msvs_funcbound_64_bap_test`. There are two columns in the data files. The first column is all raw bytes of the binary, and the second column is the label indicating it is function start (F), function end (R), or neither.
-
-To predict the function boundary in these files, run:
-
-`python scripts/play/play_func_bound.py`
-
-This scripts will load the finetuned weights you put in `checkpoints/finetune_msvs_funcbound_64` and predict the function boundaries. It will also compare to the ground-truth and the results from IDA.
+```
 
 
-### Sample data with function boundaries
 
-We provide the sample training/testing files of pretraining and finetuning in `data-src/`
+### 4. 安装 DeepBound (包含 Fairseq 编译)
 
-- `data-src/pretrain_all` contains the sample raw bytes from stripped binaries for pretraining
-- `data-src/funcbound` contains the sample raw bytes with function boundaries
+在项目根目录下运行以下命令，这将编译必要的 Cython/C++ 扩展：
 
+```bash
+# 更新构建工具
+pip install -U pip setuptools wheel
 
-We have already provided the [pretrained models](https://drive.google.com/file/d/1qgEcqrTqBp2n_sy5RhS_YiYY-YpNI5N_/view?usp=sharing) on a huge number of binaries. But if you want to pretrain on your own collected data, you can prepare the sample files similar to the format in `data-src/pretrain_all` (concatenate all bytes from all binaries, and delimit by a newline `\n` to make sure each line does not exceed the max length that model accepts). 
-Similarly, if you want to prepare the finetuning data yourself, make sure you follow the format shown in `data-src/funcbound`.
+# 以可编辑模式安装项目
+pip install -e .
 
-We have to binarize the data to make it ready to be trained. To binarize the training data for pretraining, run:
+```
 
-`./scripts/pretrain/preprocess-pretrain-all.sh`
+### 5. 快速自检
 
-The binarized training data ready for pretraining will be stored at `data-bin/pretrain_all`
+运行以下命令验证 PyTorch 和 Fairseq 是否加载成功：
 
-To binarize the training data for finetuning, run:
+```bash
+python -c "import torch, fairseq; print(f'Torch: {torch.__version__}, CUDA Available: {torch.cuda.is_available()}')"
 
-`./scripts/finetune/preprocess.sh`
+```
 
-The binarized training data ready for finetuning (for function boundary) will be stored at `data-bin/funcbound`
+## 📂 模型权重与数据
 
-## Training
+在运行推理或 Demo 之前，请确保已下载并放置好模型权重文件：
 
-If you are using your own parsed binaries for pretraining, and you have already binarized them in `data-bin/pretrain_all`, run:
+* **预训练权重**：放入 `checkpoints/pretrain_all/`
+* **微调权重**：放入 `checkpoints/finetune_msvs_funcbound_64/`
 
-`./scripts/pretrain/pretrain-all.sh`
+请参考仓库内相关文档获取权重下载链接。
 
-To finetune the model, run:
+## 🚀 演示系统运行 (Demo)
 
-`./scripts/finetune/finetune.sh`
+本项目包含一个基于 Web 的可视化演示系统。
 
-The scripts loads the pretrained weight parameters from `checkpoints/pretrain_all/` and finetunes the model.
+### 1. 启动后端 (Python)
 
-## RNN baseline
-- bi-RNN implementation is released under ./bi-RNN/
-- To run, download our sample processed SPEC 2017 O1 dataset [training](https://drive.google.com/file/d/1CzUcTaJhum-EQ4x0KDZvHUMeNhSCgSKC/view?usp=sharing), [testing](https://drive.google.com/file/d/1Tk3AVlTRvihta98Cc25yDcwwhl1jWy0z/view?usp=sharing) and put in `birnn/`
+后端负责模型推理与二进制分析服务。
 
-## Speed Evaluation
+```bash
+# 确保在 deepbound 环境下
+python demo/server.py
 
-For speed evaluation, I have put a script at `https://github.com/CUMLSec/DeepBound/blob/main/scripts/play/speed_eval.py`
+```
 
-## References
-[1] Vaswani, Ashish, et al. "Attention is all you need." Advances in neural information processing systems. 2017.
+### 2. 启动前端 (Node.js + Vite)
 
-[2] Devlin, Jacob, et al. "Bert: Pre-training of deep bidirectional transformers for language understanding." arXiv preprint arXiv:1810.04805 (2018).
+前端提供交互式可视化界面。
 
-[3] Liu, Yinhan, et al. "Roberta: A robustly optimized bert pretraining approach." arXiv preprint arXiv:1907.11692 (2019).
+```bash
+cd demo
+npm install
+npm run dev
 
-[4] Shin, Eui Chul Richard, Dawn Song, and Reza Moazzezi. "Recognizing functions in binaries with neural networks." 24th USENIX Security Symposium. 2015.
+```
+
+启动后，浏览器访问终端输出的地址（通常为 `http://localhost:5173`）即可使用。
+
+## 👥 团队分工 (Group 10)
+
+| 姓名 | 学号 | 角色与职责 |
+| --- | --- | --- |
+| **朱子阳** | 2025141000 | [核心算法] 神经网络结构实现、模型训练、理论推导 
+
+ |
+| **吴楷** | 2025140937 | [后端架构] Python 后端服务器、API 封装、LaTeX 报告统筹 
+
+ |
+| **何浔航** | 2025141008 | [数据工程] 数据预处理流水线、性能指标测试与对比实验 
+
+ |
+| **张昊健** | 2025140933 | [前端逻辑] Web 核心业务开发、检测流程控制、答辩展示 
+
+ |
+| **陈万桥** | 2025140916 | [可视化] 模型决策热力图开发、前端性能优化、交互设计 
+
+ |
+
+# DeepBound: 基于 Transformer 架构的二进制函数边界检测系统
+
+**北京邮电大学 | 网络空间安全学院 | 计算机系统结构课程大作业 (第10组)**
+
+## 📖 项目简介
+
+**DeepBound** 是一个针对剥离符号表（Stripped Binaries）的二进制函数边界检测工具。针对传统工具（如 IDA Pro）在处理高优化级别（-O3）和复杂编译器行为时的局限性，本项目提出并实现了一种基于 **Transformer** 架构的深度学习反汇编方案。
+
+核心优势在于利用自注意力机制（Self-Attention）捕捉二进制字节流中的长距离依赖关系（如栈平衡指令对），从而在不依赖特征签名的情况下，实现高精度的函数起始（Start）与结束（End）预测。
+
+## ✨ 核心特性
+
+- **Transformer 架构驱动**：利用双向 Transformer 编码器并行处理长序列，有效捕捉跨基本块的语义依赖。
+- **抗编译器优化**：在 `-O3` 激进优化等级下，F1-Score 仍保持在 **96.5%**。
+- **鲁棒性**：针对指令重排、函数内联、尾调用优化等场景具有极强的适应性。
+- **可视化交互平台**：提供像素级对齐的序列视图与增强反汇编视图，支持实时推理监控。
+
+## 🛠️ 环境配置与安装
+
+为了确保 `fairseq` 及其 C++/Cython 扩展正确编译，强烈建议使用 **Conda** 创建独立环境（避免与系统现有 torch 版本冲突）。
+
+### 1. 基础依赖准备
+
+确保系统中有可用的 C/C++ 编译器（Linux 上通常是 `gcc`/`g++`）。
+
+- *可选*：如果你设置了 `CUDA_HOME` 且想编译 CUDA 扩展，则需要完整 CUDA Toolkit（含 `nvcc`）；不需要的话不要设置 `CUDA_HOME` 也能正常安装。
+
+### 2. 创建并激活 Conda 环境
+
+Bash
+
+```
+# 创建环境 (指定 Python 3.7)
+conda create -n deepbound python=3.7 numpy scipy scikit-learn colorama
+
+# 激活环境
+conda activate deepbound
+```
+
+### 3. 安装 PyTorch
+
+根据你的硬件选择合适的版本。
+
+- **GPU 版本 (推荐，示例为 CUDA 11.0)**：
+
+  Bash
+
+  ```
+  conda install pytorch torchvision torchaudio cudatoolkit=11.0 -c pytorch
+  ```
+
+- **CPU 版本**：
+
+  Bash
+
+  ```
+  conda install pytorch torchvision torchaudio cpuonly -c pytorch
+  ```
+
+### 4. 安装 DeepBound (包含 Fairseq 编译)
+
+在项目根目录下运行以下命令，这将编译必要的 Cython/C++ 扩展：
+
+Bash
+
+```
+# 更新构建工具
+pip install -U pip setuptools wheel
+
+# 以可编辑模式安装项目
+pip install -e .
+```
+
+### 5. 快速自检
+
+运行以下命令验证 PyTorch 和 Fairseq 是否加载成功：
+
+Bash
+
+```
+python -c "import torch, fairseq; print(f'Torch: {torch.__version__}, CUDA Available: {torch.cuda.is_available()}')"
+```
+
+## 📂 模型权重与数据
+
+在运行推理或 Demo 之前，请确保已下载并放置好模型权重文件：
+
+- **预训练权重**：放入 `checkpoints/pretrain_all/`
+- **微调权重**：放入 `checkpoints/finetune_msvs_funcbound_64/`
+
+请参考仓库内相关文档获取权重下载链接。
+
+## 🚀 演示系统运行 (Demo)
+
+本项目包含一个基于 Web 的可视化演示系统。
+
+### 1. 启动后端 (Python)
+
+后端负责模型推理与二进制分析服务。
+
+Bash
+
+```
+# 确保在 deepbound 环境下
+python demo/server.py
+```
+
+### 2. 启动前端 (Node.js + Vite)
+
+前端提供交互式可视化界面。
+
+Bash
+
+```
+cd demo
+npm install
+npm run dev
+```
+
+启动后，浏览器访问终端输出的地址（通常为 `http://localhost:5173`）即可使用。
+
+## 👥 团队分工 (Group 10)
+
+| **姓名**   | **学号**   | **角色与职责**                                         |
+| ---------- | ---------- | ------------------------------------------------------ |
+| **朱子阳** | 2025141000 | [核心算法] 神经网络结构实现、模型训练、理论推导        |
+| **吴楷**   | 2025140937 | [后端架构] Python 后端服务器、API 封装、LaTeX 报告统筹 |
+| **何浔航** | 2025141008 | [数据工程] 数据预处理流水线、性能指标测试与对比实验    |
+| **张昊健** | 2025140933 | [前端逻辑] Web 核心业务开发、检测流程控制、答辩展示    |
+| **陈万桥** | 2025140916 | [可视化] 模型决策热力图开发、前端性能优化、交互设计    |
