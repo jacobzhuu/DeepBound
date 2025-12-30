@@ -5,8 +5,10 @@ import {
   formatPercent
 } from './demoDisplay.js';
 import {
+  clearCaches,
   fetchSamples,
   fetchShowcaseRecommendations,
+  fetchShowcaseStatus,
   fetchValidationStatus,
   runPrediction,
   startValidationMetrics
@@ -40,7 +42,7 @@ const elements = getElements();
 const chart = initMetricsChart(elements.metricsChart);
 const DEFAULT_WINDOW = 96;
 const RUN_DEBOUNCE_MS = 250;
-const METRIC_LABELS = ['准确率', '精确率', '召回率', 'F1'];
+const METRIC_LABELS = ['精确率', '召回率', 'F1'];
 const RECOMMEND_OPTIONS = {
   top: 3,
   maxSamples: 30,
@@ -123,12 +125,26 @@ function setRunning(isRunning) {
   }
 }
 
-function setRecommendState(isRunning) {
+function setRecommendState(isRunning, progress = null) {
   if (!elements.recommendButton) {
     return;
   }
   elements.recommendButton.disabled = isRunning || state.running;
-  elements.recommendButton.textContent = isRunning ? '推荐中...' : '自动推荐样例';
+  if (isRunning) {
+    if (progress !== null && progress >= 0) {
+      elements.recommendButton.textContent = `推荐中... ${progress}%`;
+      elements.recommendButton.style.setProperty('--progress', `${progress}%`);
+      elements.recommendButton.classList.add('progress-bar-button');
+    } else {
+      elements.recommendButton.textContent = '推荐中...';
+      elements.recommendButton.classList.remove('progress-bar-button');
+    }
+  } else {
+    elements.recommendButton.textContent = '自动推荐样例';
+    elements.recommendButton.classList.remove('progress-bar-button');
+    elements.recommendButton.style.removeProperty('--progress');
+  }
+
   if (!state.running) {
     setStatusBadge(elements, {
       text: isRunning ? '推荐中' : '空闲',
@@ -184,7 +200,7 @@ function handleValidationStatus(payload) {
     state.validationMetrics = payload.result;
     if (payload.result.totalTokens) {
       appendLog(elements, {
-        message: `验证集指标已更新（字节: ${payload.result.totalTokens}）`,
+        message: `测试集指标已更新（字节: ${payload.result.totalTokens}）`,
         level: 'info'
       });
     }
@@ -195,7 +211,7 @@ function handleValidationStatus(payload) {
 
   if (payload.status === 'error') {
     appendLog(elements, {
-      message: `验证集指标计算失败: ${payload.error || '未知错误'}`,
+      message: `测试集指标计算失败: ${payload.error || '未知错误'}`,
       level: 'alert'
     });
   }
@@ -227,7 +243,7 @@ async function pollValidationStatus() {
       state.validationPolling = false;
       state.validationTimer = null;
       state.validationRetryCount = 0;
-      appendLog(elements, { message: `验证集状态查询失败: ${error.message}`, level: 'alert' });
+      appendLog(elements, { message: `测试集状态查询失败: ${error.message}`, level: 'alert' });
     }
   }
 }
@@ -258,7 +274,7 @@ async function ensureValidationMetrics({ refresh = false } = {}) {
       pollValidationStatus();
     }
   } catch (error) {
-    appendLog(elements, { message: `验证集指标启动失败: ${error.message}`, level: 'alert' });
+    appendLog(elements, { message: `测试集指标启动失败: ${error.message}`, level: 'alert' });
   }
 }
 
@@ -288,14 +304,12 @@ function applyMetricsScope() {
     updateMetricsChart(chart, {
       labels: METRIC_LABELS,
       deepbound: [
-        toChartValue(state.sliceMetrics.deepbound.accuracy),
         toChartValue(state.sliceMetrics.deepbound.precision),
         toChartValue(state.sliceMetrics.deepbound.recall),
         toChartValue(state.sliceMetrics.deepbound.f1)
       ],
       ida: taskConfig.supportsIda
         ? [
-          toChartValue(state.sliceMetrics.ida.accuracy),
           toChartValue(state.sliceMetrics.ida.precision),
           toChartValue(state.sliceMetrics.ida.recall),
           toChartValue(state.sliceMetrics.ida.f1)
@@ -306,9 +320,9 @@ function applyMetricsScope() {
     return;
   }
 
-  setMetricsNote(elements, '验证集整体指标，不对应当前片段');
+  setMetricsNote(elements, '测试集整体指标，不对应当前片段');
   if (!state.validationMetrics) {
-    renderMetricsPlaceholder(['精确率', '召回率', 'F1'], taskConfig.supportsIda);
+    renderMetricsPlaceholder(METRIC_LABELS, taskConfig.supportsIda);
     if (!state.validationPolling) {
        ensureValidationMetrics();
     }
@@ -322,7 +336,7 @@ function applyMetricsScope() {
     formatPercent
   });
   updateMetricsChart(chart, {
-    labels: ['精确率', '召回率', 'F1'],
+    labels: METRIC_LABELS,
     deepbound: [
       toChartValue(valResults.deepbound.precision),
       toChartValue(valResults.deepbound.recall),
@@ -522,7 +536,7 @@ async function handleRecommendSample() {
     start: state.range.start,
     end: state.range.end
   };
-  setRecommendState(true);
+  setRecommendState(true, 0);
   appendLog(elements, {
     message: '正在当前样本中搜索 DeepBound 更优样例',
     level: 'info'
@@ -533,11 +547,28 @@ async function handleRecommendSample() {
       ...RECOMMEND_OPTIONS,
       sampleId: state.sample?.id
     };
-    const payload = await fetchShowcaseRecommendations(options, state.task);
+    let job = await fetchShowcaseRecommendations(options, state.task);
+
+    while (job.status === 'running' || job.status === 'idle') {
+      if (recommendToken !== state.recommendToken) {
+        return;
+      }
+      setRecommendState(true, job.progress);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      job = await fetchShowcaseStatus({ task: state.task });
+    }
+
     if (recommendToken !== state.recommendToken) {
       appendLog(elements, { message: '已忽略过期的推荐响应', level: 'alert' });
       return;
     }
+
+    if (job.status === 'error') {
+      throw new Error(job.error || 'Unknown error');
+    }
+
+    const payload = job.result;
+
     const isStale = !state.sample
       || state.task !== context.task
       || state.sample.id !== context.sampleId;
@@ -625,13 +656,38 @@ async function handleRecommendSample() {
   }
 }
 
-function handleReset() {
+async function handleReset() {
   if (!state.samples.length) return;
+  const task = state.task;
+  const taskConfig = getActiveTaskConfig();
   state.queued = false;
   if (state.pendingTimer) {
     clearTimeout(state.pendingTimer);
     state.pendingTimer = null;
   }
+  if (state.validationTimer) {
+    clearTimeout(state.validationTimer);
+    state.validationTimer = null;
+  }
+  state.validationPolling = false;
+  state.validationRetryCount = 0;
+  state.validationMetrics = null;
+  state.validationLogOffset = 0;
+  state.recommendToken += 1;
+  state.recommending = false;
+  setRecommendState(false);
+  if (state.metricsScope === 'validation') {
+    renderMetricsPlaceholder(METRIC_LABELS, taskConfig.supportsIda);
+    setMetricsNote(elements, '测试集整体指标，不对应当前片段');
+  }
+
+  try {
+    await clearCaches({ task });
+    appendLog(elements, { message: '已清除缓存：推荐样例与测试集指标将重新计算', level: 'info' });
+  } catch (error) {
+    appendLog(elements, { message: `清除缓存失败（将继续使用现有缓存）: ${error.message}`, level: 'alert' });
+  }
+
   state.sample = state.samples[0];
   state.range = getDefaultRange(state.sample.length);
   elements.sampleSelect.value = state.sample.id;

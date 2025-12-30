@@ -27,11 +27,9 @@ function getElements() {
     legendStart: document.getElementById('legend-start'),
     legendMiddle: document.getElementById('legend-middle'),
     legendNone: document.getElementById('legend-none'),
-    metricXdaAcc: document.getElementById('metric-deepbound-acc'),
     metricXdaPrec: document.getElementById('metric-deepbound-prec'),
     metricXdaRecall: document.getElementById('metric-deepbound-recall'),
     metricXdaF1: document.getElementById('metric-deepbound-f1'),
-    metricIdaAcc: document.getElementById('metric-ida-acc'),
     metricIdaPrec: document.getElementById('metric-ida-prec'),
     metricIdaRecall: document.getElementById('metric-ida-recall'),
     metricIdaF1: document.getElementById('metric-ida-f1'),
@@ -474,18 +472,15 @@ function toggleDiffs(elements, enabled) {
 }
 
 function updateMetrics(elements, { deepbound, ida, formatPercent }) {
-  elements.metricXdaAcc.textContent = formatPercent(deepbound.accuracy);
   elements.metricXdaPrec.textContent = formatPercent(deepbound.precision);
   elements.metricXdaRecall.textContent = formatPercent(deepbound.recall);
   elements.metricXdaF1.textContent = formatPercent(deepbound.f1);
 
   if (ida) {
-    elements.metricIdaAcc.textContent = formatPercent(ida.accuracy);
     elements.metricIdaPrec.textContent = formatPercent(ida.precision);
     elements.metricIdaRecall.textContent = formatPercent(ida.recall);
     elements.metricIdaF1.textContent = formatPercent(ida.f1);
   } else {
-    elements.metricIdaAcc.textContent = '-';
     elements.metricIdaPrec.textContent = '-';
     elements.metricIdaRecall.textContent = '-';
     elements.metricIdaF1.textContent = '-';
@@ -493,22 +488,17 @@ function updateMetrics(elements, { deepbound, ida, formatPercent }) {
 }
 
 function setMetricsPlaceholder(elements, placeholder = '-') {
-  elements.metricXdaAcc.textContent = placeholder;
   elements.metricXdaPrec.textContent = placeholder;
   elements.metricXdaRecall.textContent = placeholder;
   elements.metricXdaF1.textContent = placeholder;
-  elements.metricIdaAcc.textContent = placeholder;
   elements.metricIdaPrec.textContent = placeholder;
   elements.metricIdaRecall.textContent = placeholder;
   elements.metricIdaF1.textContent = placeholder;
 }
 
 function setMetricsScope(elements, scope) {
-  if (elements.metricsCard) {
-    elements.metricsCard.classList.toggle('hide-accuracy', scope === 'validation');
-  }
   if (elements.metricsScopeBadge) {
-    elements.metricsScopeBadge.textContent = scope === 'validation' ? '验证集整体' : '仅当前片段';
+    elements.metricsScopeBadge.textContent = scope === 'validation' ? '测试集整体' : '仅当前片段';
   }
   if (elements.metricScopeButtons) {
     elements.metricScopeButtons.forEach((button) => {
@@ -595,16 +585,16 @@ function initMetricsChart(canvas) {
   const chart = new Chart(canvas, {
     type: 'bar',
     data: {
-      labels: ['准确率', '精确率', '召回率', 'F1'],
+      labels: ['精确率', '召回率', 'F1'],
       datasets: [
         {
           label: 'DeepBound',
-          data: [0, 0, 0, 0],
+          data: [0, 0, 0],
           backgroundColor: '#F59E0B' // Orange
         },
         {
           label: 'IDA-PRO',
-          data: [0, 0, 0, 0],
+          data: [0, 0, 0],
           backgroundColor: '#3B82F6' // Blue
         }
       ]

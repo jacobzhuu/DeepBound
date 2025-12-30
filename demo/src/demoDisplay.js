@@ -103,7 +103,7 @@ function countBoundaryHits(truthLabels, predLabels, { startLabels = [2], endLabe
 
 function formatPercent(value) {
   if (value === null || value === undefined || Number.isNaN(value)) {
-    return '-';
+    return '0.0%';
   }
   return `${(value * 100).toFixed(1)}%`;
 }

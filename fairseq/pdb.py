@@ -7,13 +7,17 @@ import multiprocessing
 import os
 import pdb
 import sys
+import threading
 
 
 __all__ = ['set_trace']
 
 
 _stdin = [None]
-_stdin_lock = multiprocessing.Lock()
+try:
+    _stdin_lock = multiprocessing.Lock()
+except Exception:
+    _stdin_lock = threading.Lock()
 try:
     _stdin_fd = sys.stdin.fileno()
 except Exception:

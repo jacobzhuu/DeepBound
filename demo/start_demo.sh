@@ -75,7 +75,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 echo "Starting backend on ${HOST_ADDR}:${BACKEND_PORT}..."
-"$PYTHON_BIN" "$DEMO_DIR/server.py" --host "$HOST_ADDR" --port "$BACKEND_PORT" >"$BACKEND_LOG" 2>&1 &
+PYTHONPATH="$ROOT_DIR:${PYTHONPATH:-}" "$PYTHON_BIN" "$DEMO_DIR/server.py" --host "$HOST_ADDR" --port "$BACKEND_PORT" >"$BACKEND_LOG" 2>&1 &
 BACKEND_PID=$!
 
 sleep 1

@@ -64,10 +64,10 @@
               <div class="card-header-actions">
                 <div class="metric-scope" role="group" aria-label="指标范围">
                   <button type="button" class="scope-btn active" data-metrics-scope="slice">片段</button>
-                  <button type="button" class="scope-btn" data-metrics-scope="validation">验证集</button>
+                  <button type="button" class="scope-btn" data-metrics-scope="validation">测试集</button>
                 </div>
                 <span class="badge ghost" id="metrics-scope-badge">仅当前片段</span>
-                <button id="run-validation" class="ghost hidden" type="button" title="运行验证集评估">
+                <button id="run-validation" class="ghost hidden" type="button" title="运行测试集评估">
                   <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
                     <polygon points="5 3 19 12 5 21 5 3"></polygon>
                   </svg>
@@ -77,14 +77,12 @@
             <div class="metric-columns">
               <div class="metric-column">
                 <h3>DeepBound</h3>
-                <div class="metric metric-row" data-metric="accuracy"><span>准确率</span><strong id="metric-deepbound-acc">-</strong></div>
                 <div class="metric metric-row" data-metric="precision"><span>精确率</span><strong id="metric-deepbound-prec">-</strong></div>
                 <div class="metric metric-row" data-metric="recall"><span>召回率</span><strong id="metric-deepbound-recall">-</strong></div>
                 <div class="metric metric-row" data-metric="f1"><span>F1</span><strong id="metric-deepbound-f1">-</strong></div>
               </div>
               <div class="metric-column ida-column funcbound-only">
                 <h3>IDA-PRO</h3>
-                <div class="metric metric-row" data-metric="accuracy"><span>准确率</span><strong id="metric-ida-acc">-</strong></div>
                 <div class="metric metric-row" data-metric="precision"><span>精确率</span><strong id="metric-ida-prec">-</strong></div>
                 <div class="metric metric-row" data-metric="recall"><span>召回率</span><strong id="metric-ida-recall">-</strong></div>
                 <div class="metric metric-row" data-metric="f1"><span>F1</span><strong id="metric-ida-f1">-</strong></div>

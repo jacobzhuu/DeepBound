@@ -3,12 +3,17 @@ import argparse
 import hashlib
 import json
 import os
+import sys
 import subprocess
 import tempfile
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
+
+ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
 
 import torch
 from fairseq.models.roberta import RobertaModel
@@ -52,12 +57,73 @@ LABEL_MAP_CACHE = {}
 SAMPLE_CACHE = {}
 SAMPLE_INDEX = {}
 VALIDATION_CACHE = {}
+VALIDATION_RUN_ID = {}
 VALIDATION_LOCK = threading.Lock()
 VALIDATION_JOB = {}
 SHOWCASE_CACHE = {}
+SHOWCASE_RUN_ID = {}
 SHOWCASE_LOCK = threading.Lock()
+SHOWCASE_JOB = {}
 CACHE_FILE = os.path.join(os.path.dirname(__file__), '.recommend_cache.json')
 VALIDATION_CACHE_FILE = os.path.join(os.path.dirname(__file__), '.validation_cache.json')
+
+def init_showcase_job():
+    return {
+        'status': 'idle',
+        'progress': 0,
+        'error': None,
+        'result': None,
+        'startedAt': None,
+        'finishedAt': None,
+        'runId': None
+    }
+
+def get_showcase_job(task_name):
+    job = SHOWCASE_JOB.get(task_name)
+    if job is None:
+        job = init_showcase_job()
+        SHOWCASE_JOB[task_name] = job
+    return job
+
+def set_showcase_status(task, status, error=None, result=None, run_id=None):
+    task_name = resolve_task(task)
+    with SHOWCASE_LOCK:
+        job = get_showcase_job(task_name)
+        expected_run_id = SHOWCASE_RUN_ID.get(task_name)
+        if run_id is not None and expected_run_id is not None and run_id != expected_run_id:
+            return
+        job['status'] = status
+        job['error'] = error
+        if result is not None:
+            job['result'] = result
+        if status in ('done', 'error'):
+            job['finishedAt'] = time.time()
+        elif status == 'running':
+            job['startedAt'] = time.time()
+            job['progress'] = 0
+
+def set_showcase_progress(task, progress, run_id=None):
+    task_name = resolve_task(task)
+    with SHOWCASE_LOCK:
+        job = get_showcase_job(task_name)
+        expected_run_id = SHOWCASE_RUN_ID.get(task_name)
+        if run_id is not None and expected_run_id is not None and run_id != expected_run_id:
+            return
+        job['progress'] = max(0, min(100, int(progress)))
+
+def serialize_showcase_job(task):
+    task_name = resolve_task(task)
+    with SHOWCASE_LOCK:
+        job = get_showcase_job(task_name)
+        payload = {
+            'status': job['status'],
+            'progress': job['progress'],
+            'error': job['error'],
+            'task': task_name
+        }
+        if job['status'] == 'done':
+            payload['result'] = job['result']
+        return payload
 
 def load_persistent_cache():
     global SHOWCASE_CACHE
@@ -72,8 +138,10 @@ def load_persistent_cache():
 
 def save_persistent_cache():
     try:
+        with SHOWCASE_LOCK:
+            snapshot = json.dumps(SHOWCASE_CACHE, indent=2)
         with open(CACHE_FILE, 'w', encoding='utf-8') as f:
-            json.dump(SHOWCASE_CACHE, f, indent=2)
+            f.write(snapshot)
     except Exception as e:
         print(f"Failed to save cache: {e}")
 
@@ -530,7 +598,8 @@ def init_validation_job():
         'error': None,
         'result': None,
         'startedAt': None,
-        'finishedAt': None
+        'finishedAt': None,
+        'runId': None
     }
 
 def get_validation_job(task_name):
@@ -541,24 +610,33 @@ def get_validation_job(task_name):
     return job
 
 
-def append_validation_log(task, message, level='info'):
+def append_validation_log(task, message, level='info', run_id=None):
     task_name = resolve_task(task)
     with VALIDATION_LOCK:
         job = get_validation_job(task_name)
+        expected_run_id = VALIDATION_RUN_ID.get(task_name)
+        if run_id is not None and expected_run_id is not None and run_id != expected_run_id:
+            return
         job['logs'].append({'message': message, 'level': level})
 
 
-def set_validation_progress(task, progress):
+def set_validation_progress(task, progress, run_id=None):
     task_name = resolve_task(task)
     with VALIDATION_LOCK:
         job = get_validation_job(task_name)
+        expected_run_id = VALIDATION_RUN_ID.get(task_name)
+        if run_id is not None and expected_run_id is not None and run_id != expected_run_id:
+            return
         job['progress'] = max(0, min(100, int(progress)))
 
 
-def set_validation_status(task, status, error=None, result=None):
+def set_validation_status(task, status, error=None, result=None, run_id=None):
     task_name = resolve_task(task)
     with VALIDATION_LOCK:
         job = get_validation_job(task_name)
+        expected_run_id = VALIDATION_RUN_ID.get(task_name)
+        if run_id is not None and expected_run_id is not None and run_id != expected_run_id:
+            return
         job['status'] = status
         job['error'] = error
         if result is not None:
@@ -601,7 +679,7 @@ def start_validation_job(task, refresh=False):
             job['progress'] = 100
             job['result'] = cached
             job['finishedAt'] = time.time()
-            job['logs'].append({'message': '验证集指标已缓存', 'level': 'info'})
+            job['logs'].append({'message': '测试集指标已缓存', 'level': 'info'})
             VALIDATION_JOB[task_name] = job
             return
 
@@ -610,14 +688,16 @@ def start_validation_job(task, refresh=False):
         job = init_validation_job()
         job['status'] = 'running'
         job['startedAt'] = time.time()
-        job['logs'].append({'message': '开始计算验证集指标', 'level': 'info'})
+        job['runId'] = int(time.time() * 1000)
+        VALIDATION_RUN_ID[task_name] = job['runId']
+        job['logs'].append({'message': '开始计算测试集指标', 'level': 'info'})
         VALIDATION_JOB[task_name] = job
 
-    thread = threading.Thread(target=run_validation_job, args=(task_name,), daemon=True)
+    thread = threading.Thread(target=run_validation_job, args=(task_name, job['runId']), daemon=True)
     thread.start()
 
 
-def run_validation_job(task):
+def run_validation_job(task, run_id):
     task_name = resolve_task(task)
     try:
 
@@ -633,8 +713,8 @@ def run_validation_job(task):
             if sample['length'] > 0:
                 total_chunks += (sample['length'] + max_tokens - 1) // max_tokens
 
-        append_validation_log(task_name, f'样本数: {len(samples)} | 总块数: {total_chunks}')
-        append_validation_log(task_name, f'设备: {MODEL_DEVICE.get(task_name, "cpu")}')
+        append_validation_log(task_name, f'样本数: {len(samples)} | 总块数: {total_chunks}', run_id=run_id)
+        append_validation_log(task_name, f'设备: {MODEL_DEVICE.get(task_name, "cpu")}', run_id=run_id)
 
         counts_deepbound = init_counts()
         counts_ida = init_counts() if config.ida_subdir else None
@@ -659,7 +739,7 @@ def run_validation_job(task):
             ) if config.ida_subdir else None
             
             num_sample_chunks = (sample['length'] + max_tokens - 1) // max_tokens
-            append_validation_log(task_name, f'处理样本: {sample["id"]} ({sample["length"]} 字节)')
+            append_validation_log(task_name, f'处理样本: {sample["id"]} ({sample["length"]} 字节)', run_id=run_id)
 
             io_start = time.time()
             truth_tokens, truth_labels = read_full(truth_path, label_map)
@@ -696,10 +776,10 @@ def run_validation_job(task):
                 processed_chunks += 1
                 progress = int((processed_chunks / total_chunks) * 100) if total_chunks else 100
                 if progress != last_progress:
-                    set_validation_progress(task_name, progress)
+                    set_validation_progress(task_name, progress, run_id=run_id)
                     last_progress = progress
                     if progress - last_log_progress >= 10:
-                        append_validation_log(task_name, f'进度: {progress}%')
+                        append_validation_log(task_name, f'进度: {progress}%', run_id=run_id)
                         last_log_progress = progress
 
             # IDA evaluation on intersection
@@ -728,14 +808,62 @@ def run_validation_job(task):
             },
             'device': MODEL_DEVICE.get(task_name, 'cpu')
         }
-        VALIDATION_CACHE[task_name] = result
+        with VALIDATION_LOCK:
+            if VALIDATION_RUN_ID.get(task_name) != run_id:
+                return
+            VALIDATION_CACHE[task_name] = result
         save_validation_cache()
-        set_validation_progress(task_name, 100)
-        append_validation_log(task_name, '验证集指标计算完成')
-        set_validation_status(task_name, 'done', result=result)
+        set_validation_progress(task_name, 100, run_id=run_id)
+        append_validation_log(task_name, '测试集指标计算完成', run_id=run_id)
+        set_validation_status(task_name, 'done', result=result, run_id=run_id)
     except Exception as exc:
-        append_validation_log(task_name, f'验证集指标计算失败: {exc}', level='alert')
-        set_validation_status(task_name, 'error', error=str(exc))
+        append_validation_log(task_name, f'测试集指标计算失败: {exc}', level='alert', run_id=run_id)
+        set_validation_status(task_name, 'error', error=str(exc), run_id=run_id)
+
+
+def clear_task_caches(task):
+    task_name = resolve_task(task) if task else None
+    cleared = {'task': task_name, 'validation': False, 'showcase': False}
+
+    with VALIDATION_LOCK:
+        if task_name:
+            if task_name in VALIDATION_CACHE:
+                VALIDATION_CACHE.pop(task_name, None)
+                cleared['validation'] = True
+            VALIDATION_JOB[task_name] = init_validation_job()
+            VALIDATION_RUN_ID[task_name] = int(time.time() * 1000)
+            VALIDATION_JOB[task_name]['runId'] = VALIDATION_RUN_ID[task_name]
+        else:
+            cleared['validation'] = bool(VALIDATION_CACHE)
+            VALIDATION_CACHE.clear()
+            VALIDATION_JOB.clear()
+            VALIDATION_RUN_ID.clear()
+            for name in SUPPORTED_TASKS:
+                VALIDATION_RUN_ID[name] = int(time.time() * 1000)
+                VALIDATION_JOB[name] = init_validation_job()
+                VALIDATION_JOB[name]['runId'] = VALIDATION_RUN_ID[name]
+
+    with SHOWCASE_LOCK:
+        if task_name:
+            if task_name in SHOWCASE_CACHE:
+                SHOWCASE_CACHE.pop(task_name, None)
+                cleared['showcase'] = True
+            SHOWCASE_JOB[task_name] = init_showcase_job()
+            SHOWCASE_RUN_ID[task_name] = int(time.time() * 1000)
+            SHOWCASE_JOB[task_name]['runId'] = SHOWCASE_RUN_ID[task_name]
+        else:
+            cleared['showcase'] = bool(SHOWCASE_CACHE)
+            SHOWCASE_CACHE.clear()
+            SHOWCASE_JOB.clear()
+            SHOWCASE_RUN_ID.clear()
+            for name in SUPPORTED_TASKS:
+                SHOWCASE_RUN_ID[name] = int(time.time() * 1000)
+                SHOWCASE_JOB[name] = init_showcase_job()
+                SHOWCASE_JOB[name]['runId'] = SHOWCASE_RUN_ID[name]
+
+    save_validation_cache()
+    save_persistent_cache()
+    return cleared
 
 
 def clamp_range(start, end, length, max_tokens=None):
@@ -988,208 +1116,286 @@ def find_better_positions(truth_labels, deepbound_labels, ida_labels, start_offs
     return better_starts, better_ends
 
 
-def recommend_showcase(task, options):
+def start_showcase_job(task, options):
     task_name = resolve_task(task)
-    global SHOWCASE_CACHE
-    config = get_task_config(task_name)
-    refresh = options.get('refresh', False)
-    cache_key_options = options.copy()
-    cache_key_options.pop('refresh', None)
-    cache_key = json.dumps(cache_key_options, sort_keys=True)
-    if not refresh:
-        with SHOWCASE_LOCK:
-            task_cache = SHOWCASE_CACHE.get(task_name, {})
-            cached = task_cache.get(cache_key)
-            if cached:
-                # Verify cache validity against current samples
-                cached_payload = cached.get('payload', {})
-                cached_items = cached_payload.get('items', [])
-                current_ids = set(s['id'] for s in load_samples(task_name))
-                if cached_items and all(item['sampleId'] in current_ids for item in cached_items):
-                    result = cached_payload.copy()
-                    result['cached'] = True
-                    return result
-
-    start_time = time.time()
-    top = max(1, safe_int(options.get('top', 3), 3))
-    max_samples = max(0, safe_int(options.get('maxSamples', 30), 30))
-    min_delta_f1 = safe_float(options.get('minDeltaF1', 0.0), 0.0)
-    min_better = max(0, safe_int(options.get('minBetterBoundaries', 1), 1))
-    window = safe_int(options.get('window', 0), 0)
-    stride = safe_int(options.get('stride', 0), 0)
-    max_windows = max(0, safe_int(options.get('maxWindows', 24), 24))
-    limit_positions = max(0, safe_int(options.get('limitPositions', 20), 20))
-    sample_ids = options.get('sampleIds') or []
-
-    samples = load_samples(task_name)
-    if sample_ids:
-        sample_ids_set = set(sample_ids)
-        samples = [sample for sample in samples if sample['id'] in sample_ids_set]
-    if max_samples > 0:
-        samples = samples[: max_samples]
-
-    model = load_model(task_name)
-    label_map = load_label_map(task_name)
-    start_labels, end_labels, boundary_labels = get_label_sets(task_name)
-    results = []
-    samples_checked = 0
-    windows_checked = 0
-
-    if task_name == TASK_FUNCBOUND:
-        for sample in samples:
-            truth_path = os.path.join(config.data_root, config.truth_subdir, sample['id'])
-            ida_path = os.path.join(config.data_root, config.ida_subdir, sample['id'])
-            truth_tokens, truth_labels = read_full(truth_path, label_map)
-            ida_tokens, ida_labels = read_full(ida_path, label_map)
-            if truth_tokens and ida_tokens and truth_tokens != ida_tokens:
-                tokens = truth_tokens
-            else:
-                tokens = truth_tokens or ida_tokens
-
-            length = min(len(tokens), len(truth_labels), len(ida_labels))
-            if length <= 0:
-                continue
-            tokens = tokens[:length]
-            truth_labels = truth_labels[:length]
-            ida_labels = ida_labels[:length]
-
-            samples_checked += 1
-            windows = iter_windows(length, window, stride, max_windows, config.max_tokens)
-            for start, end in windows:
-                truth_slice = truth_labels[start:end]
-                if not any(label in boundary_labels for label in truth_slice):
-                    continue
-                ida_slice = ida_labels[start:end]
-                deepbound_labels = predict_labels_for_tokens(model, tokens[start:end], config.head)
-                if len(deepbound_labels) != len(truth_slice):
-                    continue
-
-                windows_checked += 1
-                deepbound_metrics = compute_metrics(truth_slice, deepbound_labels, boundary_labels)
-                ida_metrics = compute_metrics(truth_slice, ida_slice, boundary_labels)
-                deepbound_f1 = deepbound_metrics['f1'] or 0.0
-                ida_f1 = ida_metrics['f1'] or 0.0
-                delta_f1 = deepbound_f1 - ida_f1
-
-                better_starts, better_ends = find_better_positions(
-                    truth_slice, deepbound_labels, ida_slice, start, start_labels, end_labels
-                )
-                better_total = len(better_starts) + len(better_ends)
-
-                if delta_f1 < min_delta_f1 or better_total < min_better:
-                    continue
-
-                counts_deepbound = count_hits(truth_slice, deepbound_labels, start_labels, end_labels)
-                counts_ida = count_hits(truth_slice, ida_slice, start_labels, end_labels)
-
-                results.append({
-                    'sampleId': sample['id'],
-                    'start': start,
-                    'end': end - 1,
-                    'length': end - start,
-                    'deltaF1': delta_f1,
-                    'deepbound': deepbound_metrics,
-                    'ida': ida_metrics,
-                    'hits': {
-                        'deepbound': counts_deepbound,
-                        'ida': counts_ida,
-                        'deltaStart': counts_deepbound['startHits'] - counts_ida['startHits'],
-                        'deltaEnd': counts_deepbound['endHits'] - counts_ida['endHits']
-                    },
-                    'betterStarts': better_starts[:limit_positions],
-                    'betterEnds': better_ends[:limit_positions],
-                    'betterStartCount': len(better_starts),
-                    'betterEndCount': len(better_ends)
-                })
-    else:
-        for sample in samples:
-            truth_path = os.path.join(config.data_root, sample['id'])
-            truth_tokens, truth_labels = read_full(truth_path, label_map)
-            length = min(len(truth_tokens), len(truth_labels))
-            if length <= 0:
-                continue
-            tokens = truth_tokens[:length]
-            truth_labels = truth_labels[:length]
-
-            samples_checked += 1
-            windows = iter_windows(length, window, stride, max_windows, config.max_tokens)
-            for start, end in windows:
-                truth_slice = truth_labels[start:end]
-                boundary_count = sum(1 for label in truth_slice if label in boundary_labels)
-                if boundary_count < min_better:
-                    continue
-                deepbound_labels = predict_labels_for_tokens(model, tokens[start:end], config.head)
-                if len(deepbound_labels) != len(truth_slice):
-                    continue
-
-                windows_checked += 1
-                deepbound_metrics = compute_metrics(truth_slice, deepbound_labels, boundary_labels)
-                counts_deepbound = count_hits(truth_slice, deepbound_labels, start_labels, end_labels)
-
-                results.append({
-                    'sampleId': sample['id'],
-                    'start': start,
-                    'end': end - 1,
-                    'length': end - start,
-                    'boundaryCount': boundary_count,
-                    'deepbound': deepbound_metrics,
-                    'ida': None,
-                    'hits': {
-                        'deepbound': counts_deepbound
-                    }
-                })
-
-    if task_name == TASK_FUNCBOUND:
-        results.sort(
-            key=lambda item: (
-                item['deltaF1'],
-                item['betterStartCount'] + item['betterEndCount'],
-                item['deepbound']['f1'] or 0.0
-            ),
-            reverse=True
-        )
-    else:
-        results.sort(
-            key=lambda item: (
-                item['deepbound']['f1'] or 0.0,
-                item.get('boundaryCount', 0),
-                item['hits']['deepbound']['startHits']
-            ),
-            reverse=True
-        )
-    results = results[:top]
-
-    payload = {
-        'cached': False,
-        'task': task_name,
-        'strategy': 'delta_f1' if task_name == TASK_FUNCBOUND else 'top_f1',
-        'items': results,
-        'params': {
-            'top': top,
-            'maxSamples': max_samples,
-            'minDeltaF1': min_delta_f1,
-            'minBetterBoundaries': min_better,
-            'minBoundaryCount': min_better,
-            'window': window or (config.max_tokens or 512),
-            'stride': stride or (window or config.max_tokens or 512),
-            'maxWindows': max_windows,
-            'limitPositions': limit_positions,
-            'samples': samples_checked,
-            'windowsChecked': windows_checked
-        },
-        'durationMs': int((time.time() - start_time) * 1000)
-    }
-
     with SHOWCASE_LOCK:
-        if task_name not in SHOWCASE_CACHE:
-            SHOWCASE_CACHE[task_name] = {}
-        SHOWCASE_CACHE[task_name][cache_key] = {
-            'payload': payload,
-            'timestamp': int(time.time())
+        job = get_showcase_job(task_name)
+        if job['status'] == 'running':
+            return
+
+        # Reset job
+        job = init_showcase_job()
+        job['status'] = 'running'
+        job['startedAt'] = time.time()
+        job['progress'] = 1
+        job['runId'] = int(time.time() * 1000)
+        SHOWCASE_RUN_ID[task_name] = job['runId']
+        SHOWCASE_JOB[task_name] = job
+
+    thread = threading.Thread(target=run_showcase_job, args=(task_name, options, job['runId']), daemon=True)
+    thread.start()
+
+def run_showcase_job(task, options, run_id):
+    task_name = resolve_task(task)
+    try:
+        global SHOWCASE_CACHE
+        config = get_task_config(task_name)
+        refresh = options.get('refresh', False)
+        cache_key_options = options.copy()
+        cache_key_options.pop('refresh', None)
+        cache_key = json.dumps(cache_key_options, sort_keys=True)
+        cached = None
+        if not refresh:
+            with SHOWCASE_LOCK:
+                task_cache = SHOWCASE_CACHE.get(task_name, {})
+                cached = task_cache.get(cache_key)
+
+        if cached:
+            # Verify cache validity against current samples
+            cached_payload = cached.get('payload', {})
+            cached_items = cached_payload.get('items', [])
+            current_ids = set(s['id'] for s in load_samples(task_name))
+            if cached_items and all(item['sampleId'] in current_ids for item in cached_items):
+                result = cached_payload.copy()
+                result['cached'] = True
+                set_showcase_progress(task_name, 100, run_id=run_id)
+                set_showcase_status(task_name, 'done', result=result, run_id=run_id)
+                return
+
+        start_time = time.time()
+        top = max(1, safe_int(options.get('top', 3), 3))
+        max_samples = max(0, safe_int(options.get('maxSamples', 30), 30))
+        min_delta_f1 = safe_float(options.get('minDeltaF1', 0.0), 0.0)
+        min_better = max(0, safe_int(options.get('minBetterBoundaries', 1), 1))
+        window = safe_int(options.get('window', 0), 0)
+        stride = safe_int(options.get('stride', 0), 0)
+        max_windows = max(0, safe_int(options.get('maxWindows', 24), 24))
+        limit_positions = max(0, safe_int(options.get('limitPositions', 20), 20))
+        sample_ids = options.get('sampleIds') or []
+
+        samples = load_samples(task_name)
+        if sample_ids:
+            sample_ids_set = set(sample_ids)
+            samples = [sample for sample in samples if sample['id'] in sample_ids_set]
+        if max_samples > 0:
+            samples = samples[: max_samples]
+
+        total_samples = len(samples)
+        label_map = load_label_map(task_name)
+        start_labels, end_labels, boundary_labels = get_label_sets(task_name)
+        results = []
+        samples_checked = 0
+        windows_checked = 0
+        last_progress = 0
+        if total_samples:
+            set_showcase_progress(task_name, 1, run_id=run_id)
+            last_progress = 1
+        model = load_model(task_name)
+
+        # We'll iterate by index to track progress
+        for i, sample in enumerate(samples):
+            base_progress = (i / total_samples) * 100
+            
+            if task_name == TASK_FUNCBOUND:
+                truth_path = os.path.join(config.data_root, config.truth_subdir, sample['id'])
+                ida_path = os.path.join(config.data_root, config.ida_subdir, sample['id'])
+                truth_tokens, truth_labels = read_full(truth_path, label_map)
+                ida_tokens, ida_labels = read_full(ida_path, label_map)
+                if truth_tokens and ida_tokens and truth_tokens != ida_tokens:
+                    tokens = truth_tokens
+                else:
+                    tokens = truth_tokens or ida_tokens
+
+                length = min(len(tokens), len(truth_labels), len(ida_labels))
+                if length <= 0:
+                    continue
+                tokens = tokens[:length]
+                truth_labels = truth_labels[:length]
+                ida_labels = ida_labels[:length]
+
+                samples_checked += 1
+                windows = iter_windows(length, window, stride, max_windows, config.max_tokens)
+                total_windows = len(windows)
+                
+                next_sample_progress = int(((i + 1) / total_samples) * 100)
+                update_stride = max(1, total_windows // 25)
+                for w_idx, (start, end) in enumerate(windows):
+                    # Update progress within sample (even for small window counts).
+                    if w_idx % update_stride == 0 or w_idx == total_windows - 1:
+                        window_index = w_idx + 1
+                        sample_progress = (window_index / total_windows) * (100 / total_samples)
+                        current_progress = int(base_progress + sample_progress)
+                        if current_progress <= last_progress and last_progress < next_sample_progress:
+                            current_progress = min(next_sample_progress, last_progress + 1)
+                        if current_progress > last_progress:
+                            set_showcase_progress(task_name, current_progress, run_id=run_id)
+                            last_progress = current_progress
+
+                    truth_slice = truth_labels[start:end]
+                    if not any(label in boundary_labels for label in truth_slice):
+                        continue
+                    ida_slice = ida_labels[start:end]
+                    deepbound_labels = predict_labels_for_tokens(model, tokens[start:end], config.head)
+                    if len(deepbound_labels) != len(truth_slice):
+                        continue
+
+                    windows_checked += 1
+                    deepbound_metrics = compute_metrics(truth_slice, deepbound_labels, boundary_labels)
+                    ida_metrics = compute_metrics(truth_slice, ida_slice, boundary_labels)
+                    deepbound_f1 = deepbound_metrics['f1'] or 0.0
+                    ida_f1 = ida_metrics['f1'] or 0.0
+                    delta_f1 = deepbound_f1 - ida_f1
+
+                    better_starts, better_ends = find_better_positions(
+                        truth_slice, deepbound_labels, ida_slice, start, start_labels, end_labels
+                    )
+                    better_total = len(better_starts) + len(better_ends)
+
+                    if delta_f1 < min_delta_f1 or better_total < min_better:
+                        continue
+
+                    counts_deepbound = count_hits(truth_slice, deepbound_labels, start_labels, end_labels)
+                    counts_ida = count_hits(truth_slice, ida_slice, start_labels, end_labels)
+
+                    results.append({
+                        'sampleId': sample['id'],
+                        'start': start,
+                        'end': end - 1,
+                        'length': end - start,
+                        'deltaF1': delta_f1,
+                        'deepbound': deepbound_metrics,
+                        'ida': ida_metrics,
+                        'hits': {
+                            'deepbound': counts_deepbound,
+                            'ida': counts_ida,
+                            'deltaStart': counts_deepbound['startHits'] - counts_ida['startHits'],
+                            'deltaEnd': counts_deepbound['endHits'] - counts_ida['endHits']
+                        },
+                        'betterStarts': better_starts[:limit_positions],
+                        'betterEnds': better_ends[:limit_positions],
+                        'betterStartCount': len(better_starts),
+                        'betterEndCount': len(better_ends)
+                    })
+                if next_sample_progress > last_progress:
+                    set_showcase_progress(task_name, next_sample_progress, run_id=run_id)
+                    last_progress = next_sample_progress
+            else:
+                truth_path = os.path.join(config.data_root, sample['id'])
+                truth_tokens, truth_labels = read_full(truth_path, label_map)
+                length = min(len(truth_tokens), len(truth_labels))
+                if length <= 0:
+                    continue
+                tokens = truth_tokens[:length]
+                truth_labels = truth_labels[:length]
+
+                samples_checked += 1
+                windows = iter_windows(length, window, stride, max_windows, config.max_tokens)
+                total_windows = len(windows)
+
+                next_sample_progress = int(((i + 1) / total_samples) * 100)
+                update_stride = max(1, total_windows // 25)
+                for w_idx, (start, end) in enumerate(windows):
+                    # Update progress within sample (even for small window counts).
+                    if w_idx % update_stride == 0 or w_idx == total_windows - 1:
+                        window_index = w_idx + 1
+                        sample_progress = (window_index / total_windows) * (100 / total_samples)
+                        current_progress = int(base_progress + sample_progress)
+                        if current_progress <= last_progress and last_progress < next_sample_progress:
+                            current_progress = min(next_sample_progress, last_progress + 1)
+                        if current_progress > last_progress:
+                            set_showcase_progress(task_name, current_progress)
+                            last_progress = current_progress
+
+                    truth_slice = truth_labels[start:end]
+                    boundary_count = sum(1 for label in truth_slice if label in boundary_labels)
+                    if boundary_count < min_better:
+                        continue
+                    deepbound_labels = predict_labels_for_tokens(model, tokens[start:end], config.head)
+                    if len(deepbound_labels) != len(truth_slice):
+                        continue
+
+                    windows_checked += 1
+                    deepbound_metrics = compute_metrics(truth_slice, deepbound_labels, boundary_labels)
+                    counts_deepbound = count_hits(truth_slice, deepbound_labels, start_labels, end_labels)
+
+                    results.append({
+                        'sampleId': sample['id'],
+                        'start': start,
+                        'end': end - 1,
+                        'length': end - start,
+                        'boundaryCount': boundary_count,
+                        'deepbound': deepbound_metrics,
+                        'ida': None,
+                        'hits': {
+                            'deepbound': counts_deepbound
+                        }
+                    })
+                if next_sample_progress > last_progress:
+                    set_showcase_progress(task_name, next_sample_progress)
+                    last_progress = next_sample_progress
+
+        if task_name == TASK_FUNCBOUND:
+            results.sort(
+                key=lambda item: (
+                    item['deltaF1'],
+                    item['betterStartCount'] + item['betterEndCount'],
+                    item['deepbound']['f1'] or 0.0
+                ),
+                reverse=True
+            )
+        else:
+            results.sort(
+                key=lambda item: (
+                    item['deepbound']['f1'] or 0.0,
+                    item.get('boundaryCount', 0),
+                    item['hits']['deepbound']['startHits']
+                ),
+                reverse=True
+            )
+        results = results[:top]
+
+        payload = {
+            'cached': False,
+            'task': task_name,
+            'strategy': 'delta_f1' if task_name == TASK_FUNCBOUND else 'top_f1',
+            'items': results,
+            'params': {
+                'top': top,
+                'maxSamples': max_samples,
+                'minDeltaF1': min_delta_f1,
+                'minBetterBoundaries': min_better,
+                'minBoundaryCount': min_better,
+                'window': window or (config.max_tokens or 512),
+                'stride': stride or (window or config.max_tokens or 512),
+                'maxWindows': max_windows,
+                'limitPositions': limit_positions,
+                'samples': samples_checked,
+                'windowsChecked': windows_checked
+            },
+            'durationMs': int((time.time() - start_time) * 1000)
         }
+
+        with SHOWCASE_LOCK:
+            if SHOWCASE_RUN_ID.get(task_name) != run_id:
+                return
+            if task_name not in SHOWCASE_CACHE:
+                SHOWCASE_CACHE[task_name] = {}
+            SHOWCASE_CACHE[task_name][cache_key] = {
+                'payload': payload,
+                'timestamp': int(time.time())
+            }
         save_persistent_cache()
 
-    return payload
+        set_showcase_progress(task_name, 100, run_id=run_id)
+        set_showcase_status(task_name, 'done', result=payload, run_id=run_id)
+
+    except Exception as e:
+        print(f"Error in showcase job: {e}")
+        with SHOWCASE_LOCK:
+            if SHOWCASE_RUN_ID.get(task_name) != run_id:
+                return
+        set_showcase_status(task_name, 'error', error=str(e), run_id=run_id)
+
 
 
 class DeepBoundHandler(BaseHTTPRequestHandler):
@@ -1284,7 +1490,22 @@ class DeepBoundHandler(BaseHTTPRequestHandler):
                 'sampleIds': query.get('sample', []) + query.get('sampleId', []),
                 'refresh': query.get('refresh', ['0'])[0] == '1'
             }
-            payload = recommend_showcase(task, options)
+            start_showcase_job(task, options)
+            payload = serialize_showcase_job(task)
+            self._write_json(payload)
+            return
+
+        if path == '/api/showcase/status':
+            query = parse_qs(parsed.query)
+            task = query.get('task', [TASK_FUNCBOUND])[0]
+            payload = serialize_showcase_job(task)
+            self._write_json(payload)
+            return
+
+        if path == '/api/cache/clear':
+            query = parse_qs(parsed.query)
+            task = query.get('task', [None])[0]
+            payload = clear_task_caches(task)
             self._write_json(payload)
             return
 

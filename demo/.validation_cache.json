@@ -6,7 +6,7 @@
       "task": "funcbound",
       "samples": 10,
       "totalTokens": 4652544,
-      "dataRoot": "/home/zhuzy/XDA/data-raw/msvs_funcbound_64_bap_test",
+      "dataRoot": "/home/zhuzy/DeepBound/data-raw/msvs_funcbound_64_bap_test",
       "metrics": {
         "deepbound": {
           "accuracy": 0.9998903825519974,
@@ -22,8 +22,8 @@
         }
       },
       "timing": {
-        "ioMs": 5010,
-        "predictMs": 82258
+        "ioMs": 4950,
+        "predictMs": 82111
       },
       "device": "cuda"
     }
